@@ -5,13 +5,13 @@ description = "On-device software that brings J.A.R.V.I.S to life, handling voic
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "fastapi==0.116.1",
+    "fastapi<0.100.0,>=0.68.0",
     "uvicorn==0.35.0",
     "aiohttp==3.12.15",
-    "pydantic_settings==2.10.1",
+    # "pydantic_settings==2.10.1",
     "sounddevice==0.5.2",
     "numpy==2.3.2",
-    "zeroconf==0.147.0",
+    # "zeroconf==0.147.0",
     "websockets==13.1",
 ]
 
