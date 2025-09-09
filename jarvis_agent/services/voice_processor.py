@@ -7,7 +7,7 @@ import logging
 import time
 
 # from audio_handler import AudioHandler
-from jarvis_app_client import JarvisAppClient
+from jarvis_agent.services.jarvis_app_client import JarvisAppClient
 from jarvis_agent.services.audio.audio_handler import AudioHandler
 
 logger = logging.getLogger(__name__)
@@ -32,12 +32,12 @@ class VoiceProcessor:
             if not audio_data:
                 return
             # for debugging, play back the recorded audio
-            await self.audio_handler.play_audio(audio_data)
+            # await self.audio_handler.play_audio(audio_data)
 
             # Convert to text and check for wake word
-            # text = await self.backend_client.speech_to_text(audio_data)
-            # if text and self.wake_word.lower() in text.lower():
-            #     logger.info("Wake word detected!")
+            text = await self.jarvis_app_client.speech_to_text(audio_data)
+            if text and self.wake_word.lower() in text.lower():
+                logger.info("Wake word detected!")
             # print(text)
             #     await self.handle_wake_word_activation()
 
@@ -89,7 +89,6 @@ class VoiceProcessor:
         except Exception as e:
             logger.error(f"Error processing voice command: {e}")
             await self.speak_response("Sorry, I encountered an error.")
-
 
     async def speak_response(self, text: str):
         """Convert text to speech and play it"""
@@ -150,7 +149,9 @@ class VoiceProcessor:
                 if user_input and user_input.strip():
                     logger.info(f"Continuous mode - User said: {user_input}")
 
-                    response = await self.jarvis_app_client.generate_response(user_input)
+                    response = await self.jarvis_app_client.generate_response(
+                        user_input
+                    )
                     if response:
                         await self.speak_response(response)
 
