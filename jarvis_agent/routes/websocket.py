@@ -43,6 +43,8 @@ async def websocket_endpoint(
         "app_version": app_version,
         "user_agent": websocket.headers.get("user-agent"),
         "origin": websocket.headers.get("origin"),
+        "is_jarvis_app": client_id
+        == "jarvis-app-backend",  # Special flag for jarvis-app
     }
 
     try:

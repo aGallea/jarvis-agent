@@ -10,13 +10,13 @@ from jarvis_agent.routes.voice_control import router as voice_control_router
 from jarvis_agent.services.websocket_manager import WebSocketManager
 from jarvis_agent.services.voice_processor import VoiceProcessor
 from jarvis_agent.services.audio.audio_handler import AudioHandler
-from jarvis_agent.services.jarvis_app_client import JarvisAppClient
 
 logger = logging.getLogger(__name__)
 
 
 async def create_services(app: FastAPI):
     """Initialize and configure application services"""
+
     # Initialize WebSocket manager
     app.state.websocket_manager = WebSocketManager()
     logger.info("WebSocket manager initialized")
@@ -26,15 +26,10 @@ async def create_services(app: FastAPI):
     await app.state.audio_handler.initialize()
     logger.info("Audio handler initialized")
 
-    # Initialize Jarvis app client
-    app.state.jarvis_app_client = JarvisAppClient()
-    await app.state.jarvis_app_client.initialize()
-    logger.info("Jarvis app client initialized")
-
     # Initialize voice processor
     app.state.voice_processor = VoiceProcessor(
         audio_handler=app.state.audio_handler,
-        jarvis_app_client=app.state.jarvis_app_client,
+        websocket_manager=app.state.websocket_manager,
     )
     logger.info("Voice processor initialized")
 

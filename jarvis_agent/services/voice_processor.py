@@ -6,8 +6,7 @@ import asyncio
 import logging
 import time
 
-# from audio_handler import AudioHandler
-from jarvis_agent.services.jarvis_app_client import JarvisAppClient
+from jarvis_agent.services.websocket_manager import WebSocketManager
 from jarvis_agent.services.audio.audio_handler import AudioHandler
 
 logger = logging.getLogger(__name__)
@@ -16,9 +15,11 @@ logger = logging.getLogger(__name__)
 class VoiceProcessor:
     """Handles voice processing including wake word detection and command processing"""
 
-    def __init__(self, audio_handler: AudioHandler, jarvis_app_client: JarvisAppClient):
+    def __init__(
+        self, audio_handler: AudioHandler, websocket_manager: WebSocketManager
+    ):
         self.audio_handler = audio_handler
-        self.jarvis_app_client = jarvis_app_client
+        self.websocket_manager = websocket_manager
         self.wake_word = "JARVIS"
         self.is_listening = False
         self.last_activity_time = time.time()
@@ -35,7 +36,7 @@ class VoiceProcessor:
             # await self.audio_handler.play_audio(audio_data)
 
             # Convert to text and check for wake word
-            text = await self.jarvis_app_client.speech_to_text(audio_data)
+            text = await self.websocket_manager.speech_to_text(audio_data)
             if text and self.wake_word.lower() in text.lower():
                 logger.info("Wake word detected!")
             # print(text)
@@ -70,7 +71,7 @@ class VoiceProcessor:
 
             await self.audio_handler.play_audio(audio_data)
             # Convert speech to text
-            user_input = await self.jarvis_app_client.speech_to_text(audio_data)
+            user_input = await self.websocket_manager.speech_to_text(audio_data)
             if not user_input:
                 logger.warning("Could not transcribe audio")
                 await self.speak_response("I didn't catch that. Could you repeat?")
@@ -79,7 +80,7 @@ class VoiceProcessor:
             logger.info(f"User said: {user_input}")
 
             # Generate response using LLM
-            response = await self.jarvis_app_client.generate_response(user_input)
+            response = await self.websocket_manager.generate_response(user_input)
             if not response:
                 response = "I'm having trouble processing your request right now."
 
@@ -96,7 +97,7 @@ class VoiceProcessor:
             logger.info(f"Speaking: {text}")
 
             # Get audio from TTS service
-            audio_data = await self.jarvis_app_client.text_to_speech(text)
+            audio_data = await self.websocket_manager.text_to_speech(text)
             if audio_data:
                 await self.audio_handler.play_audio(audio_data)
             else:
@@ -145,11 +146,11 @@ class VoiceProcessor:
             audio_data = await self.audio_handler.stop_continuous_recording()
             if audio_data:
                 # Process the command
-                user_input = await self.jarvis_app_client.speech_to_text(audio_data)
+                user_input = await self.websocket_manager.speech_to_text(audio_data)
                 if user_input and user_input.strip():
                     logger.info(f"Continuous mode - User said: {user_input}")
 
-                    response = await self.jarvis_app_client.generate_response(
+                    response = await self.websocket_manager.generate_response(
                         user_input
                     )
                     if response:

@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import uuid
 from typing import Dict, List, Optional, Any
 from fastapi import WebSocket
 from enum import Enum
@@ -22,17 +23,29 @@ class MessageType(str, Enum):
     CLIENT_INFO = "client_info"
     AGENT_COMMAND = "agent_command"
 
+    # Jarvis-app specific message types
+    STT_REQUEST = "stt_request"
+    STT_RESPONSE = "stt_response"
+    TTS_REQUEST = "tts_request"
+    TTS_RESPONSE = "tts_response"
+    LLM_REQUEST = "llm_request"
+    LLM_RESPONSE = "llm_response"
+
 
 class WebSocketManager:
     """
     Manages WebSocket connections and handles bidirectional communication
-    with React Native clients.
+    with React Native clients and jarvis-app backend.
     """
 
     def __init__(self):
         # Store active connections with client IDs
         self.active_connections: Dict[str, WebSocket] = {}
         self.connection_metadata: Dict[str, Dict[str, Any]] = {}
+        self.jarvis_app_client_id = "jarvis-app-backend"
+
+        # Store pending requests for request-response matching
+        self.pending_requests: Dict[str, asyncio.Future] = {}
 
     async def connect(
         self,
@@ -64,11 +77,21 @@ class WebSocketManager:
         )
 
         # Send welcome message
-        await self.send_message_to_client(
-            client_id,
-            MessageType.SYSTEM_STATUS,
-            {"status": "connected", "message": "Welcome to J.A.R.V.I.S Agent"},
-        )
+        if client_id == self.jarvis_app_client_id:
+            await self.send_message_to_client(
+                client_id,
+                MessageType.SYSTEM_STATUS,
+                {
+                    "status": "connected",
+                    "message": "J.A.R.V.I.S Agent backend connection established",
+                },
+            )
+        else:
+            await self.send_message_to_client(
+                client_id,
+                MessageType.SYSTEM_STATUS,
+                {"status": "connected", "message": "Welcome to J.A.R.V.I.S Agent"},
+            )
 
     async def disconnect(self, client_id: str):
         """
@@ -232,6 +255,21 @@ class WebSocketManager:
             elif message_type == MessageType.AGENT_COMMAND.value:
                 # Handle agent commands
                 response = await self._handle_agent_command(client_id, payload)
+                return response
+
+            elif message_type == MessageType.STT_RESPONSE.value:
+                # Handle STT response from jarvis-app
+                response = await self._handle_stt_response(client_id, payload)
+                return response
+
+            elif message_type == MessageType.TTS_RESPONSE.value:
+                # Handle TTS response from jarvis-app
+                response = await self._handle_tts_response(client_id, payload)
+                return response
+
+            elif message_type == MessageType.LLM_RESPONSE.value:
+                # Handle LLM response from jarvis-app
+                response = await self._handle_llm_response(client_id, payload)
                 return response
 
             else:
@@ -443,6 +481,77 @@ class WebSocketManager:
 
         return {"action": "stop_listening", "result": "Listening mode deactivated"}
 
+    async def _handle_stt_response(
+        self, client_id: str, payload: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Handle STT response from jarvis-app"""
+        logger.info(f"Received STT response from {client_id}")
+
+        # Extract the transcribed text and request ID
+        text = payload.get("text")
+        request_id = payload.get("request_id")
+
+        # Complete the pending request if it exists
+        if request_id and request_id in self.pending_requests:
+            future = self.pending_requests[request_id]
+            if not future.done():
+                future.set_result({"text": text})
+
+        logger.info(f"STT result: {text}")
+        return {
+            "status": "stt_response_received",
+            "text": text,
+            "request_id": request_id,
+        }
+
+    async def _handle_tts_response(
+        self, client_id: str, payload: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Handle TTS response from jarvis-app"""
+        logger.info(f"Received TTS response from {client_id}")
+
+        # Extract the audio data and request ID
+        audio_data = payload.get("audio_data")  # Base64 encoded
+        request_id = payload.get("request_id")
+
+        # Complete the pending request if it exists
+        if request_id and request_id in self.pending_requests:
+            future = self.pending_requests[request_id]
+            if not future.done():
+                future.set_result({"audio_data": audio_data})
+
+        logger.info(
+            f"TTS result received, audio_data length: {len(audio_data) if audio_data else 0}"
+        )
+        return {
+            "status": "tts_response_received",
+            "audio_data": audio_data,
+            "request_id": request_id,
+        }
+
+    async def _handle_llm_response(
+        self, client_id: str, payload: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Handle LLM response from jarvis-app"""
+        logger.info(f"Received LLM response from {client_id}")
+
+        # Extract the generated response and request ID
+        response_text = payload.get("response")
+        request_id = payload.get("request_id")
+
+        # Complete the pending request if it exists
+        if request_id and request_id in self.pending_requests:
+            future = self.pending_requests[request_id]
+            if not future.done():
+                future.set_result({"response": response_text})
+
+        logger.info(f"LLM result: {response_text}")
+        return {
+            "status": "llm_response_received",
+            "response": response_text,
+            "request_id": request_id,
+        }
+
     async def cleanup_stale_connections(self):
         """Clean up connections that are no longer valid"""
         stale_clients = []
@@ -500,3 +609,180 @@ class WebSocketManager:
             clients.append(client_info)
 
         return {"total_clients": len(clients), "clients": clients}
+
+    def is_jarvis_app_connected(self) -> bool:
+        """Check if jarvis-app backend is connected"""
+        return self.is_client_connected(self.jarvis_app_client_id)
+
+    async def speech_to_text(self, audio_data: bytes) -> Optional[str]:
+        """
+        Convert speech to text via jarvis-app backend
+
+        Args:
+            audio_data: Audio data to transcribe
+
+        Returns:
+            Transcribed text or None
+        """
+        if not self.is_jarvis_app_connected():
+            logger.error("jarvis-app backend not connected for STT")
+            return None
+
+        try:
+            import base64
+
+            # Generate unique request ID
+            request_id = uuid.uuid4().hex
+
+            # Convert bytes to base64 for JSON transmission
+            audio_b64 = base64.b64encode(audio_data).decode("utf-8")
+
+            message_data = {
+                "request_id": request_id,
+                "audio_data": audio_b64,
+                "format": "bytes",
+                "timestamp": asyncio.get_event_loop().time(),
+            }
+
+            # Create future for response
+            response_future = asyncio.Future()
+            self.pending_requests[request_id] = response_future
+
+            try:
+                # Send STT request to jarvis-app
+                success = await self.send_message_to_client(
+                    self.jarvis_app_client_id, MessageType.STT_REQUEST, message_data
+                )
+
+                if not success:
+                    logger.error("Failed to send STT request to jarvis-app")
+                    return None
+
+                # Wait for response with timeout
+                try:
+                    response = await asyncio.wait_for(response_future, timeout=10.0)
+                    return response.get("text")
+                except asyncio.TimeoutError:
+                    logger.error("STT request timed out")
+                    return None
+
+            finally:
+                # Clean up pending request
+                self.pending_requests.pop(request_id, None)
+
+        except Exception as e:
+            logger.error(f"Error in speech_to_text: {e}")
+            return None
+
+    async def text_to_speech(self, text: str) -> Optional[bytes]:
+        """
+        Convert text to speech via jarvis-app backend
+
+        Args:
+            text: Text to convert to speech
+
+        Returns:
+            Audio data or None
+        """
+        if not self.is_jarvis_app_connected():
+            logger.error("jarvis-app backend not connected for TTS")
+            return None
+
+        try:
+            # Generate unique request ID
+            request_id = uuid.uuid4().hex
+
+            message_data = {
+                "request_id": request_id,
+                "text": text,
+                "timestamp": asyncio.get_event_loop().time(),
+            }
+
+            # Create future for response
+            response_future = asyncio.Future()
+            self.pending_requests[request_id] = response_future
+
+            try:
+                # Send TTS request to jarvis-app
+                success = await self.send_message_to_client(
+                    self.jarvis_app_client_id, MessageType.TTS_REQUEST, message_data
+                )
+
+                if not success:
+                    logger.error("Failed to send TTS request to jarvis-app")
+                    return None
+
+                # Wait for response with timeout
+                try:
+                    response = await asyncio.wait_for(response_future, timeout=15.0)
+                    audio_b64 = response.get("audio_data")
+                    if audio_b64:
+                        import base64
+
+                        return base64.b64decode(audio_b64)
+                    return None
+                except asyncio.TimeoutError:
+                    logger.error("TTS request timed out")
+                    return None
+
+            finally:
+                # Clean up pending request
+                self.pending_requests.pop(request_id, None)
+
+        except Exception as e:
+            logger.error(f"Error in text_to_speech: {e}")
+            return None
+
+    async def generate_response(self, user_input: str) -> Optional[str]:
+        """
+        Generate response using LLM via jarvis-app backend
+
+        Args:
+            user_input: User's input text
+
+        Returns:
+            Generated response
+        """
+        if not self.is_jarvis_app_connected():
+            logger.error("jarvis-app backend not connected for LLM")
+            return None
+
+        try:
+            # Generate unique request ID
+            request_id = uuid.uuid4().hex
+
+            message_data = {
+                "request_id": request_id,
+                "user_input": user_input,
+                "timestamp": asyncio.get_event_loop().time(),
+            }
+
+            # Create future for response
+            response_future = asyncio.Future()
+            self.pending_requests[request_id] = response_future
+
+            try:
+                # Send LLM request to jarvis-app
+                success = await self.send_message_to_client(
+                    self.jarvis_app_client_id, MessageType.LLM_REQUEST, message_data
+                )
+
+                if not success:
+                    logger.error("Failed to send LLM request to jarvis-app")
+                    return None
+
+                # Wait for response with timeout
+                try:
+                    response = await asyncio.wait_for(response_future, timeout=30.0)
+                    return response.get("response")
+                except asyncio.TimeoutError:
+                    logger.error("LLM request timed out")
+                    return None
+
+            finally:
+                # Clean up pending request
+                self.pending_requests.pop(request_id, None)
+
+        except Exception as e:
+            logger.error(f"Error in generate_response: {e}")
+            return None
