@@ -43,15 +43,22 @@ async def send_message(
     """
     try:
         if request.client_id:
-            # Send to specific client
+            # Check if specified client is the connected one
+            if not websocket_manager.is_client_connected(request.client_id):
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Client {request.client_id} not found",
+                )
+
+            # Send to the connected client
             success = await websocket_manager.send_message_to_client(
-                request.client_id, request.message_type, request.data
+                request.message_type, request.data
             )
 
             if not success:
                 raise HTTPException(
-                    status_code=404,
-                    detail=f"Client {request.client_id} not found or message delivery failed",
+                    status_code=500,
+                    detail=f"Message delivery failed to client {request.client_id}",
                 )
 
             return {
@@ -60,20 +67,17 @@ async def send_message(
                 "delivery": "unicast",
             }
         else:
-            # Broadcast to all clients
+            # Send to connected client (single client implementation)
             await websocket_manager.broadcast_message(
                 request.message_type, request.data, request.exclude_clients
             )
 
             connected_count = len(websocket_manager.get_connected_clients())
-            excluded_count = (
-                len(request.exclude_clients) if request.exclude_clients else 0
-            )
-            delivered_count = connected_count - excluded_count
+            delivered_count = 1 if connected_count > 0 else 0
 
             return {
                 "status": "success",
-                "message": f"Message broadcasted to {delivered_count} clients",
+                "message": f"Message sent to {delivered_count} client",
                 "delivery": "broadcast",
                 "delivered_to": delivered_count,
                 "total_connected": connected_count,
@@ -207,7 +211,7 @@ async def disconnect_client(
         if not websocket_manager.is_client_connected(client_id):
             raise HTTPException(status_code=404, detail=f"Client {client_id} not found")
 
-        await websocket_manager.disconnect(client_id)
+        await websocket_manager.disconnect()
 
         return {"status": "success", "message": f"Client {client_id} disconnected"}
 
@@ -275,18 +279,24 @@ async def send_notification(
     }
 
     if client_id:
+        if not websocket_manager.is_client_connected(client_id):
+            raise HTTPException(status_code=404, detail=f"Client {client_id} not found")
+
         success = await websocket_manager.send_message_to_client(
-            client_id, MessageType.NOTIFICATION, notification_data
+            MessageType.NOTIFICATION, notification_data
         )
         if not success:
-            raise HTTPException(status_code=404, detail=f"Client {client_id} not found")
+            raise HTTPException(status_code=500, detail="Failed to send notification")
         return {"status": "success", "message": f"Notification sent to {client_id}"}
     else:
         await websocket_manager.broadcast_message(
             MessageType.NOTIFICATION, notification_data
         )
         count = len(websocket_manager.get_connected_clients())
-        return {"status": "success", "message": f"Notification sent to {count} clients"}
+        return {
+            "status": "success",
+            "message": f"Notification sent to {count} client(s)",
+        }
 
 
 @router.post("/send/text")
@@ -311,13 +321,19 @@ async def send_text_message(
     }
 
     if client_id:
+        if not websocket_manager.is_client_connected(client_id):
+            raise HTTPException(status_code=404, detail=f"Client {client_id} not found")
+
         success = await websocket_manager.send_message_to_client(
-            client_id, MessageType.TEXT_MESSAGE, text_data
+            MessageType.TEXT_MESSAGE, text_data
         )
         if not success:
-            raise HTTPException(status_code=404, detail=f"Client {client_id} not found")
+            raise HTTPException(status_code=500, detail="Failed to send text message")
         return {"status": "success", "message": f"Text message sent to {client_id}"}
     else:
         await websocket_manager.broadcast_message(MessageType.TEXT_MESSAGE, text_data)
         count = len(websocket_manager.get_connected_clients())
-        return {"status": "success", "message": f"Text message sent to {count} clients"}
+        return {
+            "status": "success",
+            "message": f"Text message sent to {count} client(s)",
+        }

@@ -18,24 +18,27 @@ def get_websocket_manager() -> Optional[WebSocketManager]:
 async def websocket_endpoint(
     websocket: WebSocket,
     client_id: str = Query(..., description="Unique client identifier"),
+    password: str = Query(..., description="Authentication password"),
     device_type: Optional[str] = Query(
         None, description="Type of device (mobile, web, etc.)"
     ),
     app_version: Optional[str] = Query(None, description="App version"),
 ):
     """
-    WebSocket endpoint for React Native and other clients to connect.
+    WebSocket endpoint for authenticated client to connect.
 
     Query Parameters:
     - client_id: Unique identifier for the client (required)
+    - password: Authentication password (required - must be "TEMP_PASS")
     - device_type: Optional device type information
     - app_version: Optional app version information
 
-    Usage from React Native:
-    ws://your-server:8001/ws/connect?client_id=your-unique-id&device_type=mobile&app_version=1.0.0
+    Usage:
+    ws://your-server:8001/ws/connect?client_id=your-unique-id&password=TEMP_PASS&device_type=mobile&app_version=1.0.0
     """
     # Get WebSocket manager from app state
     websocket_manager: WebSocketManager = websocket.app.state.websocket_manager
+    logger.info(f"Client {client_id} attempting to connect via WebSocket")
 
     # Prepare client metadata
     metadata = {
@@ -43,13 +46,19 @@ async def websocket_endpoint(
         "app_version": app_version,
         "user_agent": websocket.headers.get("user-agent"),
         "origin": websocket.headers.get("origin"),
-        "is_jarvis_app": client_id
-        == "jarvis-app-backend",  # Special flag for jarvis-app
     }
 
     try:
-        # Connect the client
-        await websocket_manager.connect(websocket, client_id, metadata)
+        # Connect the client with password authentication
+        success = await websocket_manager.connect(
+            websocket, client_id, password, metadata
+        )
+
+        if not success:
+            logger.warning(f"Authentication failed for client {client_id}")
+            return
+
+        logger.info(f"WebSocket connection established for client {client_id}")
 
         # Keep the connection alive and handle messages
         while True:
@@ -70,7 +79,6 @@ async def websocket_endpoint(
                 if websocket_manager.is_client_connected(client_id):
                     try:
                         await websocket_manager.send_message_to_client(
-                            client_id,
                             MessageType.ERROR,
                             {"error": "Message processing error", "details": str(e)},
                         )
@@ -89,9 +97,13 @@ async def websocket_endpoint(
 
     except Exception as e:
         logger.error(f"WebSocket connection error for {client_id}: {e}")
+        # Clean up if needed
+        if websocket_manager.client_id == client_id:
+            await websocket_manager.disconnect()
     finally:
-        # Clean up connection
-        await websocket_manager.disconnect(client_id)
+        # Clean up connection only if it was successfully established
+        if websocket_manager.client_id == client_id:
+            await websocket_manager.disconnect()
 
 
 @router.get("/status")
