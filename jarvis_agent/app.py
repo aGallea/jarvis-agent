@@ -75,11 +75,11 @@ async def lifespan(app: FastAPI):
         )
         app.state.cleanup_task = cleanup_task
 
-        # Start voice listening task
-        voice_task = asyncio.create_task(
-            voice_listening_loop(app.state.voice_processor)
-        )
-        app.state.voice_task = voice_task
+        # # Start voice listening task
+        # voice_task = asyncio.create_task(
+        #     voice_listening_loop(app.state.voice_processor)
+        # )
+        # app.state.voice_task = voice_task
 
         logger.info("Ready to accept requests and listening for voice commands.")
     except Exception as e:

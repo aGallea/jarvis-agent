@@ -1,7 +1,6 @@
 import asyncio
 import json
 import logging
-import uuid
 from typing import Dict, List, Optional, Any
 from fastapi import WebSocket
 from enum import Enum
@@ -34,15 +33,15 @@ class MessageType(str, Enum):
 
 class WebSocketManager:
     """
-    Manages WebSocket connections and handles bidirectional communication
-    with React Native clients and jarvis-app backend.
+    Manages WebSocket connection for a single authenticated client.
     """
 
     def __init__(self):
-        # Store active connections with client IDs
-        self.active_connections: Dict[str, WebSocket] = {}
-        self.connection_metadata: Dict[str, Dict[str, Any]] = {}
-        self.jarvis_app_client_id = "jarvis-app-backend"
+        # Store single active connection
+        self.active_connection: Optional[WebSocket] = None
+        self.client_id: Optional[str] = None
+        self.connection_metadata: Dict[str, Any] = {}
+        self.SECRET_PASSWORD = "TEMP_PASS"
 
         # Store pending requests for request-response matching
         self.pending_requests: Dict[str, asyncio.Future] = {}
@@ -51,98 +50,99 @@ class WebSocketManager:
         self,
         websocket: WebSocket,
         client_id: str,
+        password: str,
         metadata: Optional[Dict[str, Any]] = None,
     ):
         """
-        Accept a new WebSocket connection and register the client.
+        Accept a new WebSocket connection after password authentication.
 
         Args:
             websocket: The WebSocket connection
             client_id: Unique identifier for the client
+            password: Authentication password
             metadata: Optional metadata about the client (device info, etc.)
         """
-        await websocket.accept()
+        # Check password first
+        if password != self.SECRET_PASSWORD:
+            await websocket.close(code=4001, reason="Invalid password")
+            logger.warning(f"Authentication failed for client {client_id}")
+            return False
 
-        # If client already exists, close old connection
-        if client_id in self.active_connections:
-            await self.disconnect(client_id)
+        # If another client is already connected, disconnect them
+        if self.active_connection is not None:
+            logger.info(f"Disconnecting existing client {self.client_id} for new connection")
+            await self.disconnect()
 
-        self.active_connections[client_id] = websocket
+        try:
+            await websocket.accept()
+            logger.debug(f"WebSocket accepted for client {client_id}")
+        except Exception as e:
+            logger.error(f"Failed to accept WebSocket connection for {client_id}: {e}")
+            raise
+
+        self.active_connection = websocket
+        self.client_id = client_id
         connection_metadata = metadata or {}
         connection_metadata["connected_at"] = asyncio.get_event_loop().time()
-        self.connection_metadata[client_id] = connection_metadata
+        self.connection_metadata = connection_metadata
 
-        logger.info(
-            f"Client {client_id} connected. Total connections: {len(self.active_connections)}"
-        )
+        logger.info(f"Client {client_id} connected successfully and authenticated")
 
         # Send welcome message
-        if client_id == self.jarvis_app_client_id:
+        try:
             await self.send_message_to_client(
-                client_id,
-                MessageType.SYSTEM_STATUS,
-                {
-                    "status": "connected",
-                    "message": "J.A.R.V.I.S Agent backend connection established",
-                },
-            )
-        else:
-            await self.send_message_to_client(
-                client_id,
                 MessageType.SYSTEM_STATUS,
                 {"status": "connected", "message": "Welcome to J.A.R.V.I.S Agent"},
             )
+        except Exception as e:
+            logger.error(f"Failed to send welcome message to {client_id}: {e}")
 
-    async def disconnect(self, client_id: str):
-        """
-        Disconnect a client and clean up resources.
+        return True
 
-        Args:
-            client_id: The client to disconnect
+    async def disconnect(self):
         """
-        if client_id in self.active_connections:
+        Disconnect the current client and clean up resources.
+        """
+        if self.active_connection is not None:
             try:
-                websocket = self.active_connections[client_id]
                 # Only try to close if not already disconnected
-                if websocket.client_state.name not in ["DISCONNECTED", "DISCONNECTING"]:
-                    await websocket.close()
+                if self.active_connection.client_state.name not in ["DISCONNECTED", "DISCONNECTING"]:
+                    await self.active_connection.close()
             except Exception as e:
-                logger.debug(f"Error closing connection for {client_id}: {e}")
+                logger.debug(f"Error closing connection for {self.client_id}: {e}")
 
-            # Always clean up from our tracking dictionaries
-            del self.active_connections[client_id]
-            if client_id in self.connection_metadata:
-                del self.connection_metadata[client_id]
+            # Always clean up
+            self.active_connection = None
+            old_client_id = self.client_id
+            self.client_id = None
+            self.connection_metadata = {}
 
-            logger.info(
-                f"Client {client_id} disconnected. Total connections: {len(self.active_connections)}"
-            )
+            logger.info(f"Client {old_client_id} disconnected")
 
     async def send_message_to_client(
-        self, client_id: str, message_type: MessageType, data: Any
+        self, message_type: MessageType, data: Any
     ) -> bool:
         """
-        Send a message to a specific client.
+        Send a message to the connected client.
 
         Args:
-            client_id: Target client ID
             message_type: Type of message
             data: Message payload
 
         Returns:
             bool: True if message was sent successfully, False otherwise
         """
-        if client_id not in self.active_connections:
-            logger.debug(f"Client {client_id} not found in active connections")
+        if self.active_connection is None or self.client_id is None:
+            logger.debug("No client connected")
             return False
 
         try:
-            websocket = self.active_connections[client_id]
-
-            # Check if the websocket connection is still valid
-            if websocket.client_state.name == "DISCONNECTED":
-                logger.debug(f"Client {client_id} is already disconnected")
-                await self.disconnect(client_id)
+            # Check if the websocket connection is still valid and connected
+            if self.active_connection.client_state.name not in ["CONNECTED"]:
+                logger.debug(
+                    f"Client {self.client_id} is not connected (state: {self.active_connection.client_state.name})"
+                )
+                await self.disconnect()
                 return False
 
             message = {
@@ -151,13 +151,13 @@ class WebSocketManager:
                 "data": data,
             }
 
-            await websocket.send_text(json.dumps(message))
-            logger.debug(f"Sent message to {client_id}: {message_type.value}")
+            await self.active_connection.send_text(json.dumps(message))
+            logger.debug(f"Sent message to {self.client_id}: {message_type.value}")
             return True
 
         except Exception as e:
-            logger.error(f"Error sending message to {client_id}: {e}")
-            await self.disconnect(client_id)
+            logger.error(f"Error sending message to {self.client_id}: {e}")
+            await self.disconnect()
             return False
 
     async def broadcast_message(
@@ -167,43 +167,18 @@ class WebSocketManager:
         exclude_clients: Optional[List[str]] = None,
     ):
         """
-        Broadcast a message to all connected clients.
+        Send a message to the connected client (single client implementation).
 
         Args:
             message_type: Type of message
             data: Message payload
-            exclude_clients: List of client IDs to exclude from broadcast
+            exclude_clients: Not used in single client implementation
         """
-        exclude_clients = exclude_clients or []
-
-        message = {
-            "type": message_type.value,
-            "timestamp": asyncio.get_event_loop().time(),
-            "data": data,
-        }
-
-        disconnected_clients = []
-
-        for client_id, websocket in self.active_connections.items():
-            if client_id in exclude_clients:
-                continue
-
-            try:
-                await websocket.send_text(json.dumps(message))
-                logger.debug(
-                    f"Broadcasted message to {client_id}: {message_type.value}"
-                )
-            except Exception as e:
-                logger.error(f"Error broadcasting to {client_id}: {e}")
-                disconnected_clients.append(client_id)
-
-        # Clean up disconnected clients
-        for client_id in disconnected_clients:
-            await self.disconnect(client_id)
-
-        logger.info(
-            f"Broadcasted {message_type.value} to {len(self.active_connections) - len(exclude_clients)} clients"
-        )
+        success = await self.send_message_to_client(message_type, data)
+        if success:
+            logger.info(f"Sent {message_type.value} to client")
+        else:
+            logger.warning(f"Failed to send {message_type.value} to client")
 
     async def handle_message(self, client_id: str, message: str) -> Dict[str, Any]:
         """
@@ -226,7 +201,6 @@ class WebSocketManager:
             # Handle different message types
             if message_type == MessageType.PING.value:
                 await self.send_message_to_client(
-                    client_id,
                     MessageType.PONG,
                     {"timestamp": asyncio.get_event_loop().time()},
                 )
@@ -275,7 +249,6 @@ class WebSocketManager:
             else:
                 logger.warning(f"Unknown message type: {message_type}")
                 await self.send_message_to_client(
-                    client_id,
                     MessageType.ERROR,
                     {"error": f"Unknown message type: {message_type}"},
                 )
@@ -284,14 +257,14 @@ class WebSocketManager:
         except json.JSONDecodeError as e:
             logger.error(f"Invalid JSON from {client_id}: {e}")
             await self.send_message_to_client(
-                client_id, MessageType.ERROR, {"error": "Invalid JSON format"}
+                MessageType.ERROR, {"error": "Invalid JSON format"}
             )
             return {"status": "error", "message": "Invalid JSON"}
 
         except Exception as e:
             logger.error(f"Error handling message from {client_id}: {e}")
             await self.send_message_to_client(
-                client_id, MessageType.ERROR, {"error": "Internal server error"}
+                MessageType.ERROR, {"error": "Internal server error"}
             )
             return {"status": "error", "message": str(e)}
 
@@ -308,7 +281,6 @@ class WebSocketManager:
         response_text = f"Received voice command: {command}"
 
         await self.send_message_to_client(
-            client_id,
             MessageType.TEXT_MESSAGE,
             {"message": response_text, "from": "jarvis"},
         )
@@ -328,7 +300,6 @@ class WebSocketManager:
         response_text = f"J.A.R.V.I.S received: {message}"
 
         await self.send_message_to_client(
-            client_id,
             MessageType.TEXT_MESSAGE,
             {"message": response_text, "from": "jarvis"},
         )
@@ -340,12 +311,12 @@ class WebSocketManager:
     ) -> Dict[str, Any]:
         """Handle system status request"""
         status = {
-            "active_connections": len(self.active_connections),
+            "active_connections": 1 if self.active_connection else 0,
             "server_status": "running",
-            "connected_clients": list(self.active_connections.keys()),
+            "connected_clients": [self.client_id] if self.client_id else [],
         }
 
-        await self.send_message_to_client(client_id, MessageType.SYSTEM_STATUS, status)
+        await self.send_message_to_client(MessageType.SYSTEM_STATUS, status)
 
         return {"status": "sent", "data": status}
 
@@ -363,8 +334,8 @@ class WebSocketManager:
         )
 
         # Update client metadata with the received information
-        if client_id in self.connection_metadata:
-            self.connection_metadata[client_id].update(
+        if self.client_id:
+            self.connection_metadata.update(
                 {
                     "client_type": client_type,
                     "device_type": device_type,
@@ -376,7 +347,6 @@ class WebSocketManager:
 
         # Send acknowledgment back to client
         await self.send_message_to_client(
-            client_id,
             MessageType.SYSTEM_STATUS,
             {
                 "status": "client_info_received",
@@ -417,7 +387,6 @@ class WebSocketManager:
         else:
             logger.warning(f"Unknown agent command: {command}")
             await self.send_message_to_client(
-                client_id,
                 MessageType.ERROR,
                 {"error": f"Unknown agent command: {command}"},
             )
@@ -425,7 +394,6 @@ class WebSocketManager:
 
         # Send acknowledgment back to client
         await self.send_message_to_client(
-            client_id,
             MessageType.SYSTEM_STATUS,
             {
                 "status": "agent_command_processed",
@@ -460,8 +428,8 @@ class WebSocketManager:
         # - Setting client state to listening
 
         # Update client metadata to indicate listening state
-        if client_id in self.connection_metadata:
-            self.connection_metadata[client_id]["listening_state"] = "active"
+        if self.client_id:
+            self.connection_metadata["listening_state"] = "active"
 
         return {"action": "start_listening", "result": "Listening mode activated"}
 
@@ -476,8 +444,8 @@ class WebSocketManager:
         # - Setting client state to idle
 
         # Update client metadata to indicate listening state
-        if client_id in self.connection_metadata:
-            self.connection_metadata[client_id]["listening_state"] = "inactive"
+        if self.client_id:
+            self.connection_metadata["listening_state"] = "inactive"
 
         return {"action": "stop_listening", "result": "Listening mode deactivated"}
 
@@ -553,236 +521,104 @@ class WebSocketManager:
         }
 
     async def cleanup_stale_connections(self):
-        """Clean up connections that are no longer valid"""
-        stale_clients = []
+        """Clean up connection if it's no longer valid"""
+        if self.active_connection is None:
+            return
 
-        for client_id, websocket in self.active_connections.items():
-            try:
-                if websocket.client_state.name in ["DISCONNECTED", "DISCONNECTING"]:
-                    stale_clients.append(client_id)
-            except Exception:
-                # If we can't check the state, consider it stale
-                stale_clients.append(client_id)
-
-        for client_id in stale_clients:
-            logger.info(f"Cleaning up stale connection for client {client_id}")
-            await self.disconnect(client_id)
-
-        if stale_clients:
-            logger.info(f"Cleaned up {len(stale_clients)} stale connections")
+        try:
+            if self.active_connection.client_state.name in ["DISCONNECTED", "DISCONNECTING"]:
+                logger.info(f"Cleaning up stale connection for client {self.client_id}")
+                await self.disconnect()
+        except Exception:
+            # If we can't check the state, consider it stale
+            logger.info(f"Cleaning up stale connection for client {self.client_id}")
+            await self.disconnect()
 
     def get_connected_clients(self) -> List[str]:
         """Get list of connected client IDs"""
-        return list(self.active_connections.keys())
+        return [self.client_id] if self.client_id else []
 
     def get_client_metadata(self, client_id: str) -> Optional[Dict[str, Any]]:
         """Get metadata for a specific client"""
-        return self.connection_metadata.get(client_id)
+        if client_id == self.client_id:
+            return self.connection_metadata
+        return None
 
     def is_client_connected(self, client_id: str) -> bool:
         """Check if a client is currently connected and the connection is valid"""
-        if client_id not in self.active_connections:
+        if client_id != self.client_id or self.active_connection is None:
             return False
 
         try:
-            websocket = self.active_connections[client_id]
             # Check if the websocket is in a connected state
-            return websocket.client_state.name not in ["DISCONNECTED", "DISCONNECTING"]
-        except Exception:
+            return self.active_connection.client_state.name == "CONNECTED"
+        except Exception as e:
+            logger.debug(f"Error checking connection state for {client_id}: {e}")
             # If we can't check the state, assume disconnected
             return False
 
     def get_client_info_summary(self) -> Dict[str, Any]:
         """Get a summary of all connected clients with their info"""
-        clients = []
-        for client_id in self.active_connections.keys():
-            metadata = self.connection_metadata.get(client_id, {})
-            client_info = {
-                "client_id": client_id,
-                "client_type": metadata.get("client_type", "unknown"),
-                "device_type": metadata.get("device_type", "unknown"),
-                "app_version": metadata.get("app_version", "unknown"),
-                "connected_at": metadata.get("connected_at"),
-                "info_received": metadata.get("info_received", False),
-                "listening_state": metadata.get("listening_state", "inactive"),
-            }
-            clients.append(client_info)
+        if not self.client_id or not self.active_connection:
+            return {"total_clients": 0, "clients": []}
 
-        return {"total_clients": len(clients), "clients": clients}
+        client_info = {
+            "client_id": self.client_id,
+            "client_type": self.connection_metadata.get("client_type", "unknown"),
+            "device_type": self.connection_metadata.get("device_type", "unknown"),
+            "app_version": self.connection_metadata.get("app_version", "unknown"),
+            "connected_at": self.connection_metadata.get("connected_at"),
+            "info_received": self.connection_metadata.get("info_received", False),
+            "listening_state": self.connection_metadata.get("listening_state", "inactive"),
+        }
 
-    def is_jarvis_app_connected(self) -> bool:
-        """Check if jarvis-app backend is connected"""
-        return self.is_client_connected(self.jarvis_app_client_id)
+        return {"total_clients": 1, "clients": [client_info]}
 
-    async def speech_to_text(self, audio_data: bytes) -> Optional[str]:
+    # Methods for voice processing integration
+    async def speech_to_text(self, audio_data: bytes) -> str:
         """
-        Convert speech to text via jarvis-app backend
-
+        Convert speech audio to text.
+        This is a placeholder - integrate with actual STT service.
+        
         Args:
-            audio_data: Audio data to transcribe
-
+            audio_data: Raw audio bytes
+            
         Returns:
-            Transcribed text or None
+            Transcribed text
         """
-        if not self.is_jarvis_app_connected():
-            logger.error("jarvis-app backend not connected for STT")
-            return None
+        logger.info("STT request received (placeholder implementation)")
+        # TODO: Implement actual speech-to-text conversion
+        # For now, return empty string to prevent errors
+        return ""
 
-        try:
-            import base64
-
-            # Generate unique request ID
-            request_id = uuid.uuid4().hex
-
-            # Convert bytes to base64 for JSON transmission
-            audio_b64 = base64.b64encode(audio_data).decode("utf-8")
-
-            message_data = {
-                "request_id": request_id,
-                "audio_data": audio_b64,
-                "format": "bytes",
-                "timestamp": asyncio.get_event_loop().time(),
-            }
-
-            # Create future for response
-            response_future = asyncio.Future()
-            self.pending_requests[request_id] = response_future
-
-            try:
-                # Send STT request to jarvis-app
-                success = await self.send_message_to_client(
-                    self.jarvis_app_client_id, MessageType.STT_REQUEST, message_data
-                )
-
-                if not success:
-                    logger.error("Failed to send STT request to jarvis-app")
-                    return None
-
-                # Wait for response with timeout
-                try:
-                    response = await asyncio.wait_for(response_future, timeout=10.0)
-                    return response.get("text")
-                except asyncio.TimeoutError:
-                    logger.error("STT request timed out")
-                    return None
-
-            finally:
-                # Clean up pending request
-                self.pending_requests.pop(request_id, None)
-
-        except Exception as e:
-            logger.error(f"Error in speech_to_text: {e}")
-            return None
-
-    async def text_to_speech(self, text: str) -> Optional[bytes]:
+    async def text_to_speech(self, text: str) -> bytes:
         """
-        Convert text to speech via jarvis-app backend
-
+        Convert text to speech audio.
+        This is a placeholder - integrate with actual TTS service.
+        
         Args:
             text: Text to convert to speech
-
+            
         Returns:
-            Audio data or None
+            Audio data as bytes
         """
-        if not self.is_jarvis_app_connected():
-            logger.error("jarvis-app backend not connected for TTS")
-            return None
+        logger.info(f"TTS request received for text: '{text}' (placeholder implementation)")
+        # TODO: Implement actual text-to-speech conversion
+        # For now, return empty bytes to prevent errors
+        return b""
 
-        try:
-            # Generate unique request ID
-            request_id = uuid.uuid4().hex
-
-            message_data = {
-                "request_id": request_id,
-                "text": text,
-                "timestamp": asyncio.get_event_loop().time(),
-            }
-
-            # Create future for response
-            response_future = asyncio.Future()
-            self.pending_requests[request_id] = response_future
-
-            try:
-                # Send TTS request to jarvis-app
-                success = await self.send_message_to_client(
-                    self.jarvis_app_client_id, MessageType.TTS_REQUEST, message_data
-                )
-
-                if not success:
-                    logger.error("Failed to send TTS request to jarvis-app")
-                    return None
-
-                # Wait for response with timeout
-                try:
-                    response = await asyncio.wait_for(response_future, timeout=15.0)
-                    audio_b64 = response.get("audio_data")
-                    if audio_b64:
-                        import base64
-
-                        return base64.b64decode(audio_b64)
-                    return None
-                except asyncio.TimeoutError:
-                    logger.error("TTS request timed out")
-                    return None
-
-            finally:
-                # Clean up pending request
-                self.pending_requests.pop(request_id, None)
-
-        except Exception as e:
-            logger.error(f"Error in text_to_speech: {e}")
-            return None
-
-    async def generate_response(self, user_input: str) -> Optional[str]:
+    async def generate_response(self, user_input: str) -> str:
         """
-        Generate response using LLM via jarvis-app backend
-
+        Generate response using LLM.
+        This is a placeholder - integrate with actual LLM service.
+        
         Args:
             user_input: User's input text
-
+            
         Returns:
-            Generated response
+            Generated response text
         """
-        if not self.is_jarvis_app_connected():
-            logger.error("jarvis-app backend not connected for LLM")
-            return None
-
-        try:
-            # Generate unique request ID
-            request_id = uuid.uuid4().hex
-
-            message_data = {
-                "request_id": request_id,
-                "user_input": user_input,
-                "timestamp": asyncio.get_event_loop().time(),
-            }
-
-            # Create future for response
-            response_future = asyncio.Future()
-            self.pending_requests[request_id] = response_future
-
-            try:
-                # Send LLM request to jarvis-app
-                success = await self.send_message_to_client(
-                    self.jarvis_app_client_id, MessageType.LLM_REQUEST, message_data
-                )
-
-                if not success:
-                    logger.error("Failed to send LLM request to jarvis-app")
-                    return None
-
-                # Wait for response with timeout
-                try:
-                    response = await asyncio.wait_for(response_future, timeout=30.0)
-                    return response.get("response")
-                except asyncio.TimeoutError:
-                    logger.error("LLM request timed out")
-                    return None
-
-            finally:
-                # Clean up pending request
-                self.pending_requests.pop(request_id, None)
-
-        except Exception as e:
-            logger.error(f"Error in generate_response: {e}")
-            return None
+        logger.info(f"LLM request received for input: '{user_input}' (placeholder implementation)")
+        # TODO: Implement actual LLM response generation
+        # For now, return a simple echo response
+        return f"I heard you say: {user_input}. This is a placeholder response."
