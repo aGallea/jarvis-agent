@@ -14,7 +14,7 @@ class SounddeviceAudioHandler:
     """Alternative audio handler using sounddevice and simpleaudio"""
 
     def __init__(self):
-        self.sample_rate = 16000
+        self.sample_rate = 24000
         self.channels = 1
         self.dtype = np.int16
         self.array_typecode = "h"  # For array.array (16-bit signed)
@@ -82,42 +82,76 @@ class SounddeviceAudioHandler:
             logger.error(f"Error recording audio: {e}")
             return None
 
-    async def play_audio(self, audio_data: bytes):
+    async def play_audio(
+        self,
+        audio_data: bytes,
+        sample_rate: int = 24000,
+    ):
         """
-        Play audio data through speakers
+        Play audio data through speakers with format detection
 
         Args:
             audio_data: Audio data to play
+            sample_rate: Sample rate of the audio data
         """
         try:
-            # if SOUNDDEVICE_AVAILABLE:
-            await self._play_with_sounddevice(audio_data)
-            # elif PLAYSOUND3_AVAILABLE:
-            #     await self._play_with_playsound3(audio_data)
-            # else:
-            #     logger.error("No audio playback libraries available")
-
+            await self._play_with_sounddevice(
+                audio_data=audio_data, sample_rate=sample_rate
+            )
         except Exception as e:
             logger.error(f"Error playing audio: {e}")
 
-    async def _play_with_sounddevice(self, audio_data: bytes):
-        """Play audio using sounddevice"""
+    async def _play_with_sounddevice(
+        self,
+        audio_data: bytes,
+        sample_rate: Optional[int] = None,
+        dtype: Optional[np.dtype] = None,
+        channels: Optional[int] = None,
+    ):
+        """Play audio using sounddevice with flexible format support"""
         try:
+            # Use provided parameters or fall back to defaults
+            actual_sample_rate = sample_rate or self.sample_rate
+            actual_dtype = dtype or self.dtype
+            actual_channels = channels or self.channels
+
             # Convert bytes to numpy array
-            audio_array = np.frombuffer(audio_data, dtype=self.dtype)
+            audio_array = np.frombuffer(audio_data, dtype=actual_dtype)
 
             # Reshape if stereo
-            if self.channels == 2:
+            if actual_channels == 2:
                 audio_array = audio_array.reshape(-1, 2)
 
-            logger.info("Playing audio with sounddevice...")
-            sd.play(audio_array, samplerate=self.sample_rate)
-            sd.wait()  # Wait until playback is finished
+            logger.info(
+                f"Playing audio with sounddevice - Sample rate: {actual_sample_rate}Hz, Channels: {actual_channels}, dtype: {actual_dtype}"
+            )
+            sd.play(audio_array, samplerate=actual_sample_rate)
+            sd.wait()  # Wait until playbook is finished
             logger.info("Audio playback completed")
 
         except Exception as e:
             logger.error(f"sounddevice playback error: {e}")
             raise
+
+    def _detect_audio_format(self, audio_data: bytes) -> str:
+        """Detect audio format from byte header"""
+        if len(audio_data) < 12:
+            return "raw"
+
+        # Check for WAV header
+        if audio_data[:4] == b"RIFF" and audio_data[8:12] == b"WAVE":
+            return "wav"
+
+        # Check for MP3 header (ID3v2 or frame sync)
+        if audio_data[:3] == b"ID3" or (
+            len(audio_data) >= 2
+            and audio_data[0] == 0xFF
+            and (audio_data[1] & 0xE0) == 0xE0
+        ):
+            return "mp3"
+
+        # Default to raw PCM
+        return "raw"
 
     async def play_audio_file(self, file_path: Path):
         """Play audio from WAV file"""
@@ -136,11 +170,11 @@ class SounddeviceAudioHandler:
 
                 # Convert frames to numpy array with correct dtype based on sample width
                 if sample_width == 1:
-                    dtype = np.uint8
+                    dtype = np.dtype(np.uint8)
                 elif sample_width == 2:
-                    dtype = np.int16
+                    dtype = np.dtype(np.int16)
                 elif sample_width == 4:
-                    dtype = np.int32
+                    dtype = np.dtype(np.int32)
                 else:
                     logger.error(f"Unsupported sample width: {sample_width}")
                     return
@@ -236,7 +270,7 @@ class SounddeviceAudioHandler:
 
     def record_voice_until_silence(self, should_stop_callback=None):
         """Record audio until silence is detected using energy-based VAD."""
-        SAMPLE_RATE = 16000
+        SAMPLE_RATE = 24000
         FRAME_DURATION = 30  # ms
         FRAME_SIZE = int(SAMPLE_RATE * FRAME_DURATION / 1000)
 
