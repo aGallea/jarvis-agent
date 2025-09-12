@@ -275,10 +275,10 @@ class SounddeviceAudioHandler:
         FRAME_SIZE = int(SAMPLE_RATE * FRAME_DURATION / 1000)
 
         # Energy-based voice activity detection parameters
-        ENERGY_THRESHOLD = 20000  # Adjust based on your environment
+        ENERGY_THRESHOLD = 100000  # Adjust based on your environment
         SILENCE_FRAMES_THRESHOLD = 20  # ~600ms silence
         NON_RELEVANT_SILENCE_FRAMES_THRESHOLD = (
-            120  # ~3 seconds of non-relevant silence
+            80  # ~3 seconds of non-relevant silence
         )
         HIGH_ENERGY_FRAMES_THRESHOLD = (
             5  # Minimum high energy frames to consider valid speech

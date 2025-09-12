@@ -50,6 +50,8 @@ class VoiceProcessor:
             text = await self.websocket_manager.speech_to_text(audio_data)
             if text and self.wake_word.lower() in text.lower():
                 logger.info("Wake word detected!")
+            else:
+                logger.info(f"Detected speech: {text}")
             # print(text)
             #     await self.handle_wake_word_activation()
 
