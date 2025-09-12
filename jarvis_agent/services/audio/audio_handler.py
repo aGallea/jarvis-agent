@@ -7,10 +7,14 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from jarvis_agent.services.audio.sounddevice_audio_handler import SounddeviceAudioHandler
+from jarvis_agent.services.audio.sounddevice_audio_handler import (
+    SounddeviceAudioHandler,
+)
+
 # from alternative_audio_handler import AlternativeAudioHandler
 
 logger = logging.getLogger(__name__)
+
 
 class AudioHandler:
     """Handles audio recording and playback operations with fallback support"""
@@ -62,9 +66,11 @@ class AudioHandler:
             logger.error("No audio recording system available")
             return None
 
-    def record_voice_until_silence(self):
+    def record_voice_until_silence(self, should_stop_callback=None):
         if self.sounddevice_handler:
-            return self.sounddevice_handler.record_voice_until_silence()
+            return self.sounddevice_handler.record_voice_until_silence(
+                should_stop_callback
+            )
         else:
             logger.error("No audio recording system available")
             return None
