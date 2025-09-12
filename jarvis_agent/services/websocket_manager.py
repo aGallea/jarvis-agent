@@ -674,8 +674,7 @@ class WebSocketManager:
     # Methods for voice processing integration
     async def speech_to_text(self, audio_data: bytes) -> str:
         """
-        Convert speech audio to text.
-        This is a placeholder - integrate with actual STT service.
+        Convert speech audio to text by sending request to connected client.
 
         Args:
             audio_data: Raw audio bytes
@@ -683,10 +682,60 @@ class WebSocketManager:
         Returns:
             Transcribed text
         """
-        logger.info("STT request received (placeholder implementation)")
-        # TODO: Implement actual speech-to-text conversion
-        # For now, return empty string to prevent errors
-        return ""
+        if not self.active_connection or not self.client_id:
+            logger.warning("No client connected for STT request")
+            return ""
+
+        request_id: Optional[str] = None
+        try:
+            import base64
+            import uuid
+
+            # Generate unique request ID
+            request_id = str(uuid.uuid4())
+
+            # Encode audio data as base64
+            audio_base64 = base64.b64encode(audio_data).decode("utf-8")
+
+            # Create future to wait for response
+            future: asyncio.Future[Dict[str, Any]] = asyncio.Future()
+            self.pending_requests[request_id] = future
+
+            # Send STT request to client
+            await self.send_message_to_client(
+                MessageType.STT_REQUEST,
+                {
+                    "request_id": request_id,
+                    "audio_data": audio_base64,
+                    "format": "wav",  # Assume WAV format, adjust as needed
+                    "sample_rate": 16000,  # Default sample rate
+                },
+            )
+
+            logger.info(f"STT request sent with ID: {request_id}")
+
+            # Wait for response with timeout
+            try:
+                result = await asyncio.wait_for(
+                    future, timeout=10.0
+                )  # 30 second timeout
+                text = result.get("text", "")
+                logger.info(f"STT completed: {text}")
+                return text
+            except asyncio.TimeoutError:
+                logger.error(f"STT request {request_id} timed out")
+                return ""
+            finally:
+                # Clean up pending request
+                if request_id in self.pending_requests:
+                    del self.pending_requests[request_id]
+
+        except Exception as e:
+            logger.error(f"Error in speech_to_text: {e}")
+            # Clean up pending request on error
+            if request_id is not None and request_id in self.pending_requests:
+                del self.pending_requests[request_id]
+            return ""
 
     async def text_to_speech(self, text: str) -> bytes:
         """
