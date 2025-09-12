@@ -24,11 +24,15 @@ class VoiceProcessor:
         self.is_listening = False
         self.last_activity_time = time.time()
 
+    def _record_voice_until_silence_sync(self):
+        return self.audio_handler.record_voice_until_silence()
+
     async def listen_for_wake_word(self):
         """Listen for wake word activation"""
         try:
             # Record short audio clip for wake word detection
-            audio_data = self.audio_handler.record_voice_until_silence()
+            audio_data = await asyncio.to_thread(self._record_voice_until_silence_sync)
+
             # audio_data = await self.audio_handler.record_audio(duration=2.0)
             if not audio_data:
                 return
