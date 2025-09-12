@@ -535,7 +535,9 @@ class WebSocketManager:
         }
 
     async def _handle_tts_response(
-        self, client_id: str, payload: Dict[str, Any]
+        self,
+        client_id: str,
+        payload: Dict[str, Any],
     ) -> Dict[str, Any]:
         """Handle TTS response from jarvis-app"""
         logger.info(f"Received TTS response from {client_id}")
@@ -543,6 +545,7 @@ class WebSocketManager:
         # Extract the audio data and request ID
         audio_data = payload.get("audio_data")  # Base64 encoded
         request_id = payload.get("request_id")
+        sample_rate = payload.get("sample_rate", 24000)  # Default to 24kHz
 
         # Complete the pending request if it exists
         if request_id and request_id in self.pending_requests:
@@ -557,7 +560,7 @@ class WebSocketManager:
                 import base64
 
                 audio_bytes = base64.b64decode(audio_data)
-                await self.audio_handler.play_audio(audio_bytes)
+                await self.audio_handler.play_audio(audio_bytes, sample_rate)
                 logger.info("TTS audio played successfully")
             except Exception as e:
                 logger.error(f"Error playing TTS audio: {e}")

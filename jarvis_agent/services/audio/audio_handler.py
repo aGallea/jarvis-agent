@@ -20,7 +20,7 @@ class AudioHandler:
     """Handles audio recording and playback operations with fallback support"""
 
     def __init__(self):
-        self.sample_rate = 16000
+        self.sample_rate = 24000
         self.channels = 1
         self.chunk_size = 1024
         # self.format = pyaudio.paInt16 if PYAUDIO_AVAILABLE else None
@@ -75,7 +75,7 @@ class AudioHandler:
             logger.error("No audio recording system available")
             return None
 
-    async def play_audio(self, audio_data: bytes):
+    async def play_audio(self, audio_data: bytes, sample_rate: int = 24000):
         """
         Play audio data through speakers
 
@@ -83,7 +83,7 @@ class AudioHandler:
             audio_data: Audio data to play
         """
         if self.sounddevice_handler:
-            await self.sounddevice_handler.play_audio(audio_data)
+            await self.sounddevice_handler.play_audio(audio_data, sample_rate)
         else:
             logger.error("No audio playback system available")
 
