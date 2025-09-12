@@ -1,11 +1,14 @@
 import asyncio
 import json
 import logging
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, TYPE_CHECKING
 from fastapi import WebSocket
 from enum import Enum
 from pathlib import Path
 from jarvis_agent.services.audio.audio_handler import AudioHandler
+
+if TYPE_CHECKING:
+    from jarvis_agent.services.voice_processor import VoiceProcessor
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +41,11 @@ class WebSocketManager:
     Manages WebSocket connection for a single authenticated client.
     """
 
-    def __init__(self, audio_handler: Optional["AudioHandler"] = None):
+    def __init__(
+        self,
+        audio_handler: Optional["AudioHandler"] = None,
+        voice_processor: Optional["VoiceProcessor"] = None,
+    ):
         # Store single active connection
         self.active_connection: Optional[WebSocket] = None
         self.client_id: Optional[str] = None
@@ -50,6 +57,9 @@ class WebSocketManager:
 
         # Audio handler for playing sounds
         self.audio_handler = audio_handler
+
+        # Voice processor for controlling listening
+        self.voice_processor = voice_processor
 
     async def connect(
         self,
@@ -447,33 +457,59 @@ class WebSocketManager:
         """Handle start listening command"""
         logger.info(f"Starting listening mode for client {client_id}")
 
-        # TODO: Implement actual listening logic
-        # This could involve:
-        # - Activating voice recognition
-        # - Starting audio stream processing
-        # - Setting client state to listening
+        if not self.voice_processor:
+            logger.warning("No voice processor available for listening control")
+            return {
+                "action": "start_listening",
+                "result": "No voice processor available",
+            }
 
-        # Update client metadata to indicate listening state
-        if self.client_id:
-            self.connection_metadata["listening_state"] = "active"
+        try:
+            # Enable voice listening in the voice processor
+            self.voice_processor.enable_listening()
 
-        return {"action": "start_listening", "result": "Listening mode activated"}
+            # Update client metadata to indicate listening state
+            if self.client_id:
+                self.connection_metadata["listening_state"] = "active"
+
+            logger.info("Voice listening activated successfully")
+            return {"action": "start_listening", "result": "Listening mode activated"}
+
+        except Exception as e:
+            logger.error(f"Error starting listening mode: {e}")
+            return {
+                "action": "start_listening",
+                "result": f"Failed to start listening: {str(e)}",
+            }
 
     async def _handle_stop_listening(self, client_id: str) -> Dict[str, Any]:
         """Handle stop listening command"""
         logger.info(f"Stopping listening mode for client {client_id}")
 
-        # TODO: Implement actual stop listening logic
-        # This could involve:
-        # - Deactivating voice recognition
-        # - Stopping audio stream processing
-        # - Setting client state to idle
+        if not self.voice_processor:
+            logger.warning("No voice processor available for listening control")
+            return {
+                "action": "stop_listening",
+                "result": "No voice processor available",
+            }
 
-        # Update client metadata to indicate listening state
-        if self.client_id:
-            self.connection_metadata["listening_state"] = "inactive"
+        try:
+            # Disable voice listening in the voice processor
+            self.voice_processor.disable_listening()
 
-        return {"action": "stop_listening", "result": "Listening mode deactivated"}
+            # Update client metadata to indicate listening state
+            if self.client_id:
+                self.connection_metadata["listening_state"] = "inactive"
+
+            logger.info("Voice listening deactivated successfully")
+            return {"action": "stop_listening", "result": "Listening mode deactivated"}
+
+        except Exception as e:
+            logger.error(f"Error stopping listening mode: {e}")
+            return {
+                "action": "stop_listening",
+                "result": f"Failed to stop listening: {str(e)}",
+            }
 
     async def _handle_stt_response(
         self, client_id: str, payload: Dict[str, Any]
@@ -603,6 +639,17 @@ class WebSocketManager:
         if not self.client_id or not self.active_connection:
             return {"total_clients": 0, "clients": []}
 
+        # Get the actual listening state from voice processor if available
+        listening_state = "unknown"
+        if self.voice_processor:
+            listening_state = (
+                "active" if self.voice_processor.is_listening_enabled() else "inactive"
+            )
+        else:
+            listening_state = self.connection_metadata.get(
+                "listening_state", "inactive"
+            )
+
         client_info = {
             "client_id": self.client_id,
             "client_type": self.connection_metadata.get("client_type", "unknown"),
@@ -610,12 +657,16 @@ class WebSocketManager:
             "app_version": self.connection_metadata.get("app_version", "unknown"),
             "connected_at": self.connection_metadata.get("connected_at"),
             "info_received": self.connection_metadata.get("info_received", False),
-            "listening_state": self.connection_metadata.get(
-                "listening_state", "inactive"
-            ),
+            "listening_state": listening_state,
         }
 
         return {"total_clients": 1, "clients": [client_info]}
+
+    def is_listening_enabled(self) -> bool:
+        """Check if voice listening is currently enabled"""
+        if self.voice_processor:
+            return self.voice_processor.is_listening_enabled()
+        return False
 
     # Methods for voice processing integration
     async def speech_to_text(self, audio_data: bytes) -> str:

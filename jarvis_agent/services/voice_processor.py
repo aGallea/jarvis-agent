@@ -22,13 +22,20 @@ class VoiceProcessor:
         self.websocket_manager = websocket_manager
         self.wake_word = "JARVIS"
         self.is_listening = False
+        self.listening_enabled = True  # Global toggle for voice listening
         self.last_activity_time = time.time()
+        self._stop_recording_event = asyncio.Event()  # Event to signal stop recording
 
     def _record_voice_until_silence_sync(self):
-        return self.audio_handler.record_voice_until_silence()
+        return self.audio_handler.record_voice_until_silence(
+            should_stop_callback=self.should_stop_recording
+        )
 
     async def listen_for_wake_word(self):
         """Listen for wake word activation"""
+        if not self.listening_enabled:
+            return
+
         try:
             # Record short audio clip for wake word detection
             audio_data = await asyncio.to_thread(self._record_voice_until_silence_sync)
@@ -67,7 +74,9 @@ class VoiceProcessor:
             logger.info("Listening for voice command...")
 
             # Record user command
-            audio_data = self.audio_handler.record_voice_until_silence()
+            audio_data = self.audio_handler.record_voice_until_silence(
+                should_stop_callback=self.should_stop_recording
+            )
             # audio_data = await self.audio_handler.record_audio(duration=5.0)
             if not audio_data:
                 logger.warning("No audio data received")
@@ -207,3 +216,23 @@ class VoiceProcessor:
         # For other commands, use the backend LLM
         # else:
         #     return await self.backend_client.generate_response(command)
+
+    def enable_listening(self):
+        """Enable voice listening"""
+        self.listening_enabled = True
+        self._stop_recording_event.clear()  # Clear the stop event
+        logger.info("Voice listening enabled")
+
+    def disable_listening(self):
+        """Disable voice listening"""
+        self.listening_enabled = False
+        self._stop_recording_event.set()  # Signal to stop any ongoing recording
+        logger.info("Voice listening disabled")
+
+    def is_listening_enabled(self) -> bool:
+        """Check if voice listening is enabled"""
+        return self.listening_enabled
+
+    def should_stop_recording(self) -> bool:
+        """Check if recording should be stopped"""
+        return self._stop_recording_event.is_set()

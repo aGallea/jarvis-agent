@@ -1,4 +1,3 @@
-from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 import asyncio
 import logging
@@ -36,6 +35,10 @@ async def create_services(app: FastAPI):
     )
     logger.info("Voice processor initialized")
 
+    # Now set the voice processor reference in the websocket manager
+    app.state.websocket_manager.voice_processor = app.state.voice_processor
+    logger.info("Voice processor reference set in WebSocket manager")
+
 
 async def voice_listening_loop(voice_processor: VoiceProcessor):
     """Background task for continuous voice listening"""
@@ -44,8 +47,14 @@ async def voice_listening_loop(voice_processor: VoiceProcessor):
     try:
         while True:
             try:
-                await voice_processor.listen_for_wake_word()
-                await asyncio.sleep(0.1)  # Small delay to prevent busy waiting
+                # Only listen if voice listening is enabled
+                if voice_processor.is_listening_enabled():
+                    await voice_processor.listen_for_wake_word()
+                    await asyncio.sleep(0.1)  # Small delay to prevent busy waiting
+                else:
+                    await asyncio.sleep(
+                        0.5
+                    )  # Longer delay when disabled to save resources
             except Exception as e:
                 logger.error(f"Error in voice listening loop: {e}")
                 await asyncio.sleep(1)  # Wait a bit before retrying

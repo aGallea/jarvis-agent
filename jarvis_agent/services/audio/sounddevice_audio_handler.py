@@ -9,6 +9,7 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
+
 class SounddeviceAudioHandler:
     """Alternative audio handler using sounddevice and simpleaudio"""
 
@@ -233,7 +234,7 @@ class SounddeviceAudioHandler:
             return b"chunk"  # Placeholder
         return None
 
-    def record_voice_until_silence(self):
+    def record_voice_until_silence(self, should_stop_callback=None):
         """Record audio until silence is detected using energy-based VAD."""
         SAMPLE_RATE = 16000
         FRAME_DURATION = 30  # ms
@@ -289,6 +290,12 @@ class SounddeviceAudioHandler:
         ) as stream:
             while True:
                 iteration += 1
+
+                # Check if we should stop recording (external signal)
+                if should_stop_callback and should_stop_callback():
+                    logger.info("🛑 Recording stopped by external signal")
+                    break
+
                 # print("reading stream...")
                 frame, _ = stream.read(FRAME_SIZE)
                 # print("frame read done.")
