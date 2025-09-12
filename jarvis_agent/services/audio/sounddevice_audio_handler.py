@@ -1,14 +1,6 @@
-"""
-Alternative audio handling using simpleaudio and sounddevice
-Fallback for when pyaudio is not available or fails to install
-"""
-
-# import asyncio
 import logging
 import wave
 
-# import tempfile
-# import os
 from pathlib import Path
 from typing import Optional
 import array
@@ -16,22 +8,6 @@ import sounddevice as sd
 import numpy as np
 
 logger = logging.getLogger(__name__)
-
-# try:
-#     import sounddevice as sd
-#     SOUNDDEVICE_AVAILABLE = True
-# except ImportError:
-#     SOUNDDEVICE_AVAILABLE = False
-#     logger.warning("sounddevice not available")
-
-# try:
-#     from playsound3 import playsound
-
-#     PLAYSOUND3_AVAILABLE = True
-# except ImportError:
-#     PLAYSOUND3_AVAILABLE = False
-#     logger.warning("playsound3 not available")
-
 
 class SounddeviceAudioHandler:
     """Alternative audio handler using sounddevice and simpleaudio"""
@@ -83,10 +59,6 @@ class SounddeviceAudioHandler:
         Returns:
             Audio data as bytes or None if failed
         """
-        # if not SOUNDDEVICE_AVAILABLE:
-        #     logger.error("sounddevice not available for recording")
-        #     return None
-
         try:
             logger.info(f"Recording audio for {duration} seconds...")
 
@@ -146,37 +118,44 @@ class SounddeviceAudioHandler:
             logger.error(f"sounddevice playback error: {e}")
             raise
 
-    # async def _play_with_playsound3(self, audio_data: bytes):
-    #     """Play audio using playsound3"""
-    #     try:
-    #         logger.info("Playing audio with playsound3...")
-
-    #         # Save audio data to a temporary file and play it
-    #         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
-    #             # Save audio data as WAV file
-    #             with wave.open(tmp_file.name, "wb") as wf:
-    #                 wf.setnchannels(self.channels)
-    #                 wf.setsampwidth(2)  # 16-bit = 2 bytes
-    #                 wf.setframerate(self.sample_rate)
-    #                 wf.writeframes(audio_data)
-
-    #             # Play the file
-    #             playsound(tmp_file.name)
-    #             logger.info("Audio playback completed")
-
-    #             # Clean up temp file
-    #             os.unlink(tmp_file.name)
-
-    #     except Exception as e:
-    #         logger.error(f"playsound3 playback error: {e}")
-    #         raise
-
     async def play_audio_file(self, file_path: Path):
         """Play audio from WAV file"""
         try:
             with wave.open(str(file_path), "rb") as wf:
+                # Get the file's audio properties
+                sample_rate = wf.getframerate()
+                channels = wf.getnchannels()
+                sample_width = wf.getsampwidth()
                 frames = wf.readframes(wf.getnframes())
-                await self.play_audio(frames)
+
+                logger.info(f"Playing audio file: {file_path}")
+                logger.info(
+                    f"File properties - Sample rate: {sample_rate}Hz, Channels: {channels}, Sample width: {sample_width} bytes"
+                )
+
+                # Convert frames to numpy array with correct dtype based on sample width
+                if sample_width == 1:
+                    dtype = np.uint8
+                elif sample_width == 2:
+                    dtype = np.int16
+                elif sample_width == 4:
+                    dtype = np.int32
+                else:
+                    logger.error(f"Unsupported sample width: {sample_width}")
+                    return
+
+                audio_array = np.frombuffer(frames, dtype=dtype)
+
+                # Reshape if stereo
+                if channels == 2:
+                    audio_array = audio_array.reshape(-1, 2)
+
+                # Play using the file's original sample rate
+                logger.info("Playing audio with sounddevice...")
+                sd.play(audio_array, samplerate=sample_rate)
+                sd.wait()  # Wait until playback is finished
+                logger.info("Audio playback completed")
+
         except Exception as e:
             logger.error(f"Error playing audio file: {e}")
 

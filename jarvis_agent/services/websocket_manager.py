@@ -4,6 +4,8 @@ import logging
 from typing import Dict, List, Optional, Any
 from fastapi import WebSocket
 from enum import Enum
+from pathlib import Path
+from jarvis_agent.services.audio.audio_handler import AudioHandler
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +38,7 @@ class WebSocketManager:
     Manages WebSocket connection for a single authenticated client.
     """
 
-    def __init__(self):
+    def __init__(self, audio_handler: Optional["AudioHandler"] = None):
         # Store single active connection
         self.active_connection: Optional[WebSocket] = None
         self.client_id: Optional[str] = None
@@ -45,6 +47,9 @@ class WebSocketManager:
 
         # Store pending requests for request-response matching
         self.pending_requests: Dict[str, asyncio.Future] = {}
+
+        # Audio handler for playing sounds
+        self.audio_handler = audio_handler
 
     async def connect(
         self,
@@ -414,13 +419,29 @@ class WebSocketManager:
         """Handle test audio command"""
         logger.info(f"Testing audio for client {client_id}")
 
-        # TODO: Implement actual audio testing logic
-        # This could involve:
-        # - Testing microphone access
-        # - Testing speaker output
-        # - Running audio diagnostics
+        if not self.audio_handler:
+            logger.warning("No audio handler available for audio testing")
+            return {"action": "test_audio", "result": "No audio handler available"}
 
-        return {"action": "test_audio", "result": "Audio test initiated"}
+        try:
+            # Try to play a test audio file if it exists
+            test_audio_path = (
+                Path(__file__).parent.parent / "assets" / "audio" / "test_audio.wav"
+            )
+            if test_audio_path.exists():
+                logger.info(f"Playing test audio file: {test_audio_path}")
+                await self.audio_handler.play_audio_file(test_audio_path)
+                return {
+                    "action": "test_audio",
+                    "result": "Test audio file played successfully",
+                }
+            else:
+                logger.info("Test audio file not found, skipping audio test")
+                return {"action": "test_audio", "result": "Test audio file not found"}
+
+        except Exception as e:
+            logger.error(f"Error playing test audio: {e}")
+            return {"action": "test_audio", "result": f"Audio test failed: {str(e)}"}
 
     async def _handle_start_listening(self, client_id: str) -> Dict[str, Any]:
         """Handle start listening command"""
@@ -492,6 +513,18 @@ class WebSocketManager:
             future = self.pending_requests[request_id]
             if not future.done():
                 future.set_result({"audio_data": audio_data})
+
+        # Play the audio if we have an audio handler and audio data
+        if self.audio_handler and audio_data:
+            try:
+                # Decode base64 audio data and play it
+                import base64
+
+                audio_bytes = base64.b64decode(audio_data)
+                await self.audio_handler.play_audio(audio_bytes)
+                logger.info("TTS audio played successfully")
+            except Exception as e:
+                logger.error(f"Error playing TTS audio: {e}")
 
         logger.info(
             f"TTS result received, audio_data length: {len(audio_data) if audio_data else 0}"
@@ -618,6 +651,35 @@ class WebSocketManager:
         # TODO: Implement actual text-to-speech conversion
         # For now, return empty bytes to prevent errors
         return b""
+
+    async def text_to_speech_and_play(self, text: str) -> bool:
+        """
+        Convert text to speech and play it immediately using the audio handler.
+
+        Args:
+            text: Text to convert to speech
+
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        if not self.audio_handler:
+            logger.warning("No audio handler available for TTS playback")
+            return False
+
+        try:
+            # Get audio data from TTS
+            audio_data = await self.text_to_speech(text)
+            if audio_data:
+                # Play the audio
+                await self.audio_handler.play_audio(audio_data)
+                logger.info(f"TTS audio played for text: '{text}'")
+                return True
+            else:
+                logger.warning("No audio data received from TTS")
+                return False
+        except Exception as e:
+            logger.error(f"Error in text_to_speech_and_play: {e}")
+            return False
 
     async def generate_response(self, user_input: str) -> str:
         """

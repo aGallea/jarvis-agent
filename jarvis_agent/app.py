@@ -18,14 +18,16 @@ logger = logging.getLogger(__name__)
 async def create_services(app: FastAPI):
     """Initialize and configure application services"""
 
-    # Initialize WebSocket manager
-    app.state.websocket_manager = WebSocketManager()
-    logger.info("WebSocket manager initialized")
-
-    # Initialize audio handler
+    # Initialize audio handler first
     app.state.audio_handler = AudioHandler()
     await app.state.audio_handler.initialize()
     logger.info("Audio handler initialized")
+
+    # Initialize WebSocket manager with audio handler
+    app.state.websocket_manager = WebSocketManager(
+        audio_handler=app.state.audio_handler
+    )
+    logger.info("WebSocket manager initialized")
 
     # Initialize voice processor
     app.state.voice_processor = VoiceProcessor(
