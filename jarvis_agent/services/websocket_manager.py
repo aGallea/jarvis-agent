@@ -70,7 +70,9 @@ class WebSocketManager:
 
         # If another client is already connected, disconnect them
         if self.active_connection is not None:
-            logger.info(f"Disconnecting existing client {self.client_id} for new connection")
+            logger.info(
+                f"Disconnecting existing client {self.client_id} for new connection"
+            )
             await self.disconnect()
 
         try:
@@ -106,7 +108,10 @@ class WebSocketManager:
         if self.active_connection is not None:
             try:
                 # Only try to close if not already disconnected
-                if self.active_connection.client_state.name not in ["DISCONNECTED", "DISCONNECTING"]:
+                if self.active_connection.client_state.name not in [
+                    "DISCONNECTED",
+                    "DISCONNECTING",
+                ]:
                     await self.active_connection.close()
             except Exception as e:
                 logger.debug(f"Error closing connection for {self.client_id}: {e}")
@@ -526,7 +531,10 @@ class WebSocketManager:
             return
 
         try:
-            if self.active_connection.client_state.name in ["DISCONNECTED", "DISCONNECTING"]:
+            if self.active_connection.client_state.name in [
+                "DISCONNECTED",
+                "DISCONNECTING",
+            ]:
                 logger.info(f"Cleaning up stale connection for client {self.client_id}")
                 await self.disconnect()
         except Exception:
@@ -569,7 +577,9 @@ class WebSocketManager:
             "app_version": self.connection_metadata.get("app_version", "unknown"),
             "connected_at": self.connection_metadata.get("connected_at"),
             "info_received": self.connection_metadata.get("info_received", False),
-            "listening_state": self.connection_metadata.get("listening_state", "inactive"),
+            "listening_state": self.connection_metadata.get(
+                "listening_state", "inactive"
+            ),
         }
 
         return {"total_clients": 1, "clients": [client_info]}
@@ -579,10 +589,10 @@ class WebSocketManager:
         """
         Convert speech audio to text.
         This is a placeholder - integrate with actual STT service.
-        
+
         Args:
             audio_data: Raw audio bytes
-            
+
         Returns:
             Transcribed text
         """
@@ -595,14 +605,16 @@ class WebSocketManager:
         """
         Convert text to speech audio.
         This is a placeholder - integrate with actual TTS service.
-        
+
         Args:
             text: Text to convert to speech
-            
+
         Returns:
             Audio data as bytes
         """
-        logger.info(f"TTS request received for text: '{text}' (placeholder implementation)")
+        logger.info(
+            f"TTS request received for text: '{text}' (placeholder implementation)"
+        )
         # TODO: Implement actual text-to-speech conversion
         # For now, return empty bytes to prevent errors
         return b""
@@ -611,14 +623,16 @@ class WebSocketManager:
         """
         Generate response using LLM.
         This is a placeholder - integrate with actual LLM service.
-        
+
         Args:
             user_input: User's input text
-            
+
         Returns:
             Generated response text
         """
-        logger.info(f"LLM request received for input: '{user_input}' (placeholder implementation)")
+        logger.info(
+            f"LLM request received for input: '{user_input}' (placeholder implementation)"
+        )
         # TODO: Implement actual LLM response generation
         # For now, return a simple echo response
         return f"I heard you say: {user_input}. This is a placeholder response."

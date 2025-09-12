@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 import asyncio
 import logging
@@ -41,7 +42,6 @@ async def voice_listening_loop(voice_processor: VoiceProcessor):
     try:
         while True:
             try:
-                # Listen for wake word
                 await voice_processor.listen_for_wake_word()
                 await asyncio.sleep(0.1)  # Small delay to prevent busy waiting
             except Exception as e:
@@ -57,7 +57,7 @@ async def periodic_cleanup(websocket_manager: WebSocketManager):
     """Periodic task to clean up stale WebSocket connections"""
     while True:
         try:
-            await asyncio.sleep(60)  # Run every minute
+            await asyncio.sleep(60)
             await websocket_manager.cleanup_stale_connections()
         except Exception as e:
             logger.error(f"Error in periodic cleanup: {e}")
@@ -75,11 +75,11 @@ async def lifespan(app: FastAPI):
         )
         app.state.cleanup_task = cleanup_task
 
-        # # Start voice listening task
-        # voice_task = asyncio.create_task(
-        #     voice_listening_loop(app.state.voice_processor)
-        # )
-        # app.state.voice_task = voice_task
+        # Start voice listening task
+        voice_task = asyncio.create_task(
+            voice_listening_loop(app.state.voice_processor)
+        )
+        app.state.voice_task = voice_task
 
         logger.info("Ready to accept requests and listening for voice commands.")
     except Exception as e:
@@ -88,9 +88,6 @@ async def lifespan(app: FastAPI):
 
     # Cancel background tasks on shutdown
     tasks_to_cancel = []
-
-    if hasattr(app.state, "cleanup_task"):
-        tasks_to_cancel.append(app.state.cleanup_task)
 
     if hasattr(app.state, "voice_task"):
         tasks_to_cancel.append(app.state.voice_task)
