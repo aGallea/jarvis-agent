@@ -521,11 +521,26 @@ class WebSocketManager:
         text = payload.get("text")
         request_id = payload.get("request_id")
 
+        logger.info(f"STT response - request_id: {request_id}, text: {text}")
+        logger.info(f"Current pending requests: {list(self.pending_requests.keys())}")
+
         # Complete the pending request if it exists
         if request_id and request_id in self.pending_requests:
             future = self.pending_requests[request_id]
             if not future.done():
-                future.set_result({"text": text})
+                logger.info(f"Setting result for future with request_id: {request_id}")
+                try:
+                    future.set_result({"text": text})
+                    logger.info(f"Successfully set result for request_id: {request_id}")
+                except Exception as e:
+                    logger.error(f"Error setting future result for {request_id}: {e}")
+            else:
+                logger.warning(f"Future for request_id {request_id} is already done")
+        else:
+            if not request_id:
+                logger.warning("No request_id in STT response payload")
+            else:
+                logger.warning(f"No pending request found for request_id: {request_id}")
 
         logger.info(f"STT result: {text}")
         return {
@@ -674,8 +689,7 @@ class WebSocketManager:
     # Methods for voice processing integration
     async def speech_to_text(self, audio_data: bytes) -> str:
         """
-        Convert speech audio to text.
-        This is a placeholder - integrate with actual STT service.
+        Convert speech audio to text by sending request to connected client.
 
         Args:
             audio_data: Raw audio bytes
@@ -683,15 +697,77 @@ class WebSocketManager:
         Returns:
             Transcribed text
         """
-        logger.info("STT request received (placeholder implementation)")
-        # TODO: Implement actual speech-to-text conversion
-        # For now, return empty string to prevent errors
-        return ""
+        if not self.active_connection or not self.client_id:
+            logger.warning("No client connected for STT request")
+            return ""
+
+        request_id: Optional[str] = None
+        try:
+            import base64
+            import uuid
+
+            # Generate unique request ID
+            request_id = str(uuid.uuid4())
+            logger.info(f"Generated STT request ID: {request_id}")
+
+            # Encode audio data as base64
+            audio_base64 = base64.b64encode(audio_data).decode("utf-8")
+            logger.info(f"Encoded audio data length: {len(audio_base64)}")
+
+            # Create future to wait for response
+            future: asyncio.Future[Dict[str, Any]] = asyncio.Future()
+            self.pending_requests[request_id] = future
+            logger.info(f"Added request to pending_requests: {request_id}")
+
+            # Send STT request to client
+            message_sent = await self.send_message_to_client(
+                MessageType.STT_REQUEST,
+                {
+                    "request_id": request_id,
+                    "audio_data": audio_base64,
+                    "format": "wav",  # Assume WAV format, adjust as needed
+                    "sample_rate": 24000,  # Default sample rate
+                },
+            )
+
+            if not message_sent:
+                logger.error(f"Failed to send STT request with ID: {request_id}")
+                return ""
+
+            logger.info(f"STT request sent with ID: {request_id}")
+
+            # Wait for response with timeout
+            try:
+                logger.info(f"Waiting for STT response for request_id: {request_id}")
+                result = await asyncio.wait_for(
+                    future, timeout=30.0
+                )  # Increased timeout to 30 seconds
+                text = result.get("text", "")
+                logger.info(f"STT completed successfully: {text}")
+                return text
+            except asyncio.TimeoutError:
+                logger.error(f"STT request {request_id} timed out after 30 seconds")
+                return ""
+            except Exception as e:
+                logger.error(f"Error waiting for STT response {request_id}: {e}")
+                return ""
+            finally:
+                # Clean up pending request
+                if request_id in self.pending_requests:
+                    del self.pending_requests[request_id]
+                    logger.info(f"Cleaned up pending request: {request_id}")
+
+        except Exception as e:
+            logger.error(f"Error in speech_to_text: {e}")
+            # Clean up pending request on error
+            if request_id is not None and request_id in self.pending_requests:
+                del self.pending_requests[request_id]
+                logger.info(f"Cleaned up pending request on error: {request_id}")
+            return ""
 
     async def text_to_speech(self, text: str) -> bytes:
         """
-        Convert text to speech audio.
-        This is a placeholder - integrate with actual TTS service.
+        Convert text to speech audio by sending request to connected client.
 
         Args:
             text: Text to convert to speech
@@ -699,12 +775,81 @@ class WebSocketManager:
         Returns:
             Audio data as bytes
         """
-        logger.info(
-            f"TTS request received for text: '{text}' (placeholder implementation)"
-        )
-        # TODO: Implement actual text-to-speech conversion
-        # For now, return empty bytes to prevent errors
-        return b""
+        if not self.active_connection or not self.client_id:
+            logger.warning("No client connected for TTS request")
+            return b""
+
+        request_id: Optional[str] = None
+        try:
+            import uuid
+
+            # Generate unique request ID
+            request_id = str(uuid.uuid4())
+            logger.info(f"Generated TTS request ID: {request_id}")
+
+            # Create future to wait for response
+            future: asyncio.Future[Dict[str, Any]] = asyncio.Future()
+            self.pending_requests[request_id] = future
+            logger.info(f"Added TTS request to pending_requests: {request_id}")
+
+            # Send TTS request to client
+            message_sent = await self.send_message_to_client(
+                MessageType.TTS_REQUEST,
+                {
+                    "request_id": request_id,
+                    "text": text,
+                    "voice": "default",  # Could be made configurable
+                    "speed": 1.0,  # Could be made configurable
+                    "format": "wav",  # Could be made configurable
+                },
+            )
+
+            if not message_sent:
+                logger.error(f"Failed to send TTS request with ID: {request_id}")
+                return b""
+
+            logger.info(f"TTS request sent with ID: {request_id}")
+
+            # Wait for response with timeout
+            try:
+                logger.info(f"Waiting for TTS response for request_id: {request_id}")
+                result = await asyncio.wait_for(
+                    future, timeout=30.0
+                )  # 30 seconds timeout
+                audio_data = result.get("audio_data", "")
+
+                if audio_data:
+                    # Decode base64 audio data
+                    import base64
+
+                    audio_bytes = base64.b64decode(audio_data)
+                    logger.info(
+                        f"TTS completed successfully, audio length: {len(audio_bytes)} bytes"
+                    )
+                    return audio_bytes
+                else:
+                    logger.warning("No audio data received from TTS response")
+                    return b""
+
+            except asyncio.TimeoutError:
+                logger.error(f"TTS request {request_id} timed out after 30 seconds")
+                return b""
+            except Exception as e:
+                logger.error(f"Error waiting for TTS response {request_id}: {e}")
+                return b""
+            finally:
+                # Clean up pending request
+                if request_id in self.pending_requests:
+                    del self.pending_requests[request_id]
+                    logger.info(f"Cleaned up TTS pending request: {request_id}")
+
+        except Exception as e:
+            logger.error(f"Error in text_to_speech: {e}")
+            # Clean up pending request on error
+            if request_id is not None and request_id in self.pending_requests:
+                del self.pending_requests[request_id]
+                logger.info(f"Cleaned up TTS pending request on error: {request_id}")
+            return b""
 
     async def text_to_speech_and_play(self, text: str) -> bool:
         """

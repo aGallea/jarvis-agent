@@ -10,12 +10,18 @@ from jarvis_agent.routes.voice_control import router as voice_control_router
 from jarvis_agent.services.websocket_manager import WebSocketManager
 from jarvis_agent.services.voice_processor import VoiceProcessor
 from jarvis_agent.services.audio.audio_handler import AudioHandler
+from jarvis_agent.services.backend_client import BackendClient
 
 logger = logging.getLogger(__name__)
 
 
 async def create_services(app: FastAPI):
     """Initialize and configure application services"""
+
+    # Initialize backend client
+    app.state.backend_client = BackendClient(app.state.settings.backend_url)
+    await app.state.backend_client.start()
+    logger.info("Backend client initialized")
 
     # Initialize audio handler first
     app.state.audio_handler = AudioHandler()
@@ -30,8 +36,10 @@ async def create_services(app: FastAPI):
 
     # Initialize voice processor
     app.state.voice_processor = VoiceProcessor(
+        settings=app.state.settings,
         audio_handler=app.state.audio_handler,
         websocket_manager=app.state.websocket_manager,
+        backend_client=app.state.backend_client,
     )
     logger.info("Voice processor initialized")
 
@@ -43,15 +51,36 @@ async def create_services(app: FastAPI):
 async def voice_listening_loop(voice_processor: VoiceProcessor):
     """Background task for continuous voice listening"""
     logger.info("Starting voice listening loop...")
+    current_mode = None  # Track current mode for logging state changes
 
     try:
         while True:
             try:
                 # Only listen if voice listening is enabled
                 if voice_processor.is_listening_enabled():
-                    await voice_processor.listen_for_wake_word()
+                    # Check if wake word was recently detected
+                    if voice_processor.is_wake_word_recently_detected():
+                        # Log mode change if needed
+                        if current_mode != "command":
+                            logger.info("Switching to command listening mode")
+                            current_mode = "command"
+
+                        # Listen for commands since wake word was detected
+                        await voice_processor.listen_for_command()
+                    else:
+                        # Log mode change if needed
+                        if current_mode != "wake_word":
+                            logger.info("Switching to wake word listening mode")
+                            current_mode = "wake_word"
+
+                        # Listen for wake word
+                        await voice_processor.listen_for_wake_word()
+
                     await asyncio.sleep(0.1)  # Small delay to prevent busy waiting
                 else:
+                    if current_mode is not None:
+                        logger.info("Voice listening disabled")
+                        current_mode = None
                     await asyncio.sleep(
                         0.5
                     )  # Longer delay when disabled to save resources
@@ -113,6 +142,10 @@ async def lifespan(app: FastAPI):
     # Cleanup audio resources
     if hasattr(app.state, "audio_handler"):
         await app.state.audio_handler.cleanup()
+
+    # Cleanup backend client
+    if hasattr(app.state, "backend_client"):
+        await app.state.backend_client.close()
 
     logger.info("Shutting down...")
 
