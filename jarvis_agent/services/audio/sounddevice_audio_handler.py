@@ -276,12 +276,12 @@ class SounddeviceAudioHandler:
 
         # Energy-based voice activity detection parameters
         ENERGY_THRESHOLD = 100000  # Adjust based on your environment
-        SILENCE_FRAMES_THRESHOLD = 20  # ~600ms silence
+        SILENCE_FRAMES_THRESHOLD = 60
         NON_RELEVANT_SILENCE_FRAMES_THRESHOLD = (
-            80  # ~3 seconds of non-relevant silence
+            90  # ~3 seconds of non-relevant silence
         )
         HIGH_ENERGY_FRAMES_THRESHOLD = (
-            5  # Minimum high energy frames to consider valid speech
+            3  # Minimum high energy frames to consider valid speech
         )
         ZCR_MIN = 0.05  # Minimum zero-crossing rate to consider as speech
 

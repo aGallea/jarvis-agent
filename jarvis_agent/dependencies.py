@@ -6,6 +6,7 @@ from fastapi import Request
 from jarvis_agent.services.websocket_manager import WebSocketManager
 from jarvis_agent.services.voice_processor import VoiceProcessor
 from jarvis_agent.services.audio.audio_handler import AudioHandler
+from jarvis_agent.services.backend_client import BackendClient
 
 
 def get_websocket_manager(request: Request) -> WebSocketManager:
@@ -45,3 +46,16 @@ def get_audio_handler(request: Request) -> AudioHandler:
         AudioHandler instance
     """
     return request.app.state.audio_handler
+
+
+def get_backend_client(request: Request) -> BackendClient:
+    """
+    Get the backend client from the application state.
+
+    Args:
+        request: FastAPI request object containing app state
+
+    Returns:
+        BackendClient instance
+    """
+    return request.app.state.backend_client

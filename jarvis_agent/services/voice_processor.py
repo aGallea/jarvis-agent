@@ -6,8 +6,10 @@ import asyncio
 import logging
 import time
 
+from jarvis_agent.services.backend_client import BackendClient
 from jarvis_agent.services.websocket_manager import WebSocketManager
 from jarvis_agent.services.audio.audio_handler import AudioHandler
+from jarvis_agent.settings import Settings
 
 logger = logging.getLogger(__name__)
 
@@ -16,15 +18,23 @@ class VoiceProcessor:
     """Handles voice processing including wake word detection and command processing"""
 
     def __init__(
-        self, audio_handler: AudioHandler, websocket_manager: WebSocketManager
+        self,
+        settings: Settings,
+        audio_handler: AudioHandler,
+        websocket_manager: WebSocketManager,
+        backend_client: BackendClient,
     ):
+        self.settings = settings
         self.audio_handler = audio_handler
         self.websocket_manager = websocket_manager
+        self.backend_client = backend_client
         self.wake_word = "JARVIS"
         self.is_listening = False
         self.listening_enabled = True  # Global toggle for voice listening
         self.last_activity_time = time.time()
         self._stop_recording_event = asyncio.Event()  # Event to signal stop recording
+        self.wake_word_detected_time = None  # Track when wake word was detected
+        self.wake_word_timeout = 60  # 60 seconds timeout for wake word detection
 
     def _record_voice_until_silence_sync(self):
         return self.audio_handler.record_voice_until_silence(
@@ -37,6 +47,7 @@ class VoiceProcessor:
             return
 
         try:
+            logger.debug("Listening for wake word...")
             # Record short audio clip for wake word detection
             audio_data = await asyncio.to_thread(self._record_voice_until_silence_sync)
 
@@ -47,25 +58,96 @@ class VoiceProcessor:
             # await self.audio_handler.play_audio(audio_data)
 
             # Convert to text and check for wake word
-            text = await self.websocket_manager.speech_to_text(audio_data)
+            if self.settings.backend_direct_access:
+                response = await self.backend_client.speech_to_text(audio_data)
+                text = response.get("text")
+            else:
+                text = await self.websocket_manager.speech_to_text(audio_data)
             if text and self.wake_word.lower() in text.lower():
                 logger.info("Wake word detected!")
+                # Set flag that wake word was recently detected
+                self.wake_word_detected_time = time.time()
+                await self.handle_wake_word_activation()
             else:
-                logger.info(f"Detected speech: {text}")
-            # print(text)
-            #     await self.handle_wake_word_activation()
+                if text:
+                    logger.debug(f"Detected speech (no wake word): {text}")
 
         except Exception as e:
             logger.error(f"Error in wake word detection: {e}")
 
+    async def listen_for_command(self):
+        """Listen for voice commands after wake word has been detected"""
+        if not self.listening_enabled:
+            return
+
+        # Check if wake word timeout has expired
+        if not self.is_wake_word_recently_detected():
+            logger.info(
+                "Wake word timeout expired, returning to wake word detection mode"
+            )
+            self.clear_wake_word_detection()
+            return
+
+        try:
+            logger.info("Listening for command...")
+            # Record audio for command
+            audio_data = await asyncio.to_thread(self._record_voice_until_silence_sync)
+
+            if not audio_data:
+                return
+
+            # Convert to text
+            text = await self.websocket_manager.speech_to_text(audio_data)
+            if text and text.strip():
+                logger.info(f"Command detected: {text}")
+                await self.process_command_text(text)
+                # Reset the wake word timer after successful command processing
+                self.wake_word_detected_time = time.time()
+            else:
+                logger.debug("No clear command detected")
+
+        except Exception as e:
+            logger.error(f"Error in command listening: {e}")
+
+    async def process_command_text(self, command_text: str):
+        """Process the transcribed command text"""
+        try:
+            logger.info(f"Processing command: {command_text}")
+
+            # Generate response using LLM
+            if self.settings.backend_direct_access:
+                response = await self.backend_client.generate_response(command_text)
+                text = response.get("response")
+            else:
+                text = await self.websocket_manager.generate_response(command_text)
+
+            if not text:
+                text = "I'm having trouble processing your request right now."
+
+            # Convert response to speech and play
+            await self.speak_response(text)
+
+        except Exception as e:
+            logger.error(f"Error processing command text: {e}")
+            await self.speak_response("Sorry, I encountered an error.")
+
+    def is_wake_word_recently_detected(self) -> bool:
+        """Check if wake word was detected recently (within timeout period)"""
+        if self.wake_word_detected_time is None:
+            return False
+
+        return (time.time() - self.wake_word_detected_time) < self.wake_word_timeout
+
+    def clear_wake_word_detection(self):
+        """Clear the wake word detection flag"""
+        self.wake_word_detected_time = None
+
     async def handle_wake_word_activation(self):
-        """Handle wake word activation and start listening for command"""
+        """Handle wake word activation and provide feedback"""
         try:
             # Play activation sound or speak confirmation
-            await self.speak_response("Yes?")
-
-            # Listen for actual command
-            await self.process_voice_command()
+            await self.speak_response("Hi there, how can I help you?")
+            logger.info("Wake word activation handled - ready for commands")
 
         except Exception as e:
             logger.error(f"Error handling wake word activation: {e}")
@@ -112,7 +194,10 @@ class VoiceProcessor:
             logger.info(f"Speaking: {text}")
 
             # Get audio from TTS service
-            audio_data = await self.websocket_manager.text_to_speech(text)
+            if self.settings.backend_direct_access:
+                audio_data = await self.backend_client.text_to_speech(text)
+            else:
+                audio_data = await self.websocket_manager.text_to_speech(text)
             if audio_data:
                 await self.audio_handler.play_audio(audio_data)
             else:
@@ -229,6 +314,7 @@ class VoiceProcessor:
         """Disable voice listening"""
         self.listening_enabled = False
         self._stop_recording_event.set()  # Signal to stop any ongoing recording
+        self.clear_wake_word_detection()  # Clear wake word detection when disabling
         logger.info("Voice listening disabled")
 
     def is_listening_enabled(self) -> bool:
@@ -238,3 +324,23 @@ class VoiceProcessor:
     def should_stop_recording(self) -> bool:
         """Check if recording should be stopped"""
         return self._stop_recording_event.is_set()
+
+    def get_wake_word_status(self) -> dict:
+        """Get current wake word detection status"""
+        return {
+            "wake_word_detected": self.is_wake_word_recently_detected(),
+            "time_since_detection": (
+                (time.time() - self.wake_word_detected_time)
+                if self.wake_word_detected_time
+                else None
+            ),
+            "timeout_remaining": (
+                max(
+                    0,
+                    self.wake_word_timeout
+                    - (time.time() - self.wake_word_detected_time),
+                )
+                if self.wake_word_detected_time
+                else 0
+            ),
+        }
